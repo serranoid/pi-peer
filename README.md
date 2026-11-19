@@ -89,8 +89,13 @@ in order:
    list — read from `hc get $HC_TERMINAL_ID`, prefixed `pi-`;
 3. the folder's basename, prefixed `pi-`.
 
-A name already taken by a live session gets a number (`pi-second-brain-2`), so
-two sessions in the same folder stay distinguishable.
+A name already taken by a live session gets the tab's name if that has one, else
+a number (`pi-second-brain-2`), so two sessions in the same space stay apart.
+
+The name is read again every 30 seconds: rename the space in Herdr and the
+address follows, so it always matches what is on screen. Herdr registers a
+terminal a moment after it starts, so the lookup retries for a few seconds
+before falling back to the folder.
 
 ## Commands
 

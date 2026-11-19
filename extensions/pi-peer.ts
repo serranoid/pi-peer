@@ -147,29 +147,68 @@ function sanitizeName(value: string): string {
 		.slice(0, 32);
 }
 
+/** Where Herdr says this terminal is: "space / tab". */
+async function herdrWhere(pi: ExtensionAPI): Promise<{ space: string; tab: string } | undefined> {
+	const terminal = process.env.HC_TERMINAL_ID;
+	if (!terminal) return undefined;
+	try {
+		const result = await pi.exec("hc", ["get", terminal], { timeout: 3000 });
+		const info = JSON.parse(result.stdout);
+		const where = info?.labels?.where;
+		if (typeof where === "string" && where.includes("/")) {
+			const [space, tab] = where.split("/");
+			return { space: space.trim(), tab: (tab ?? "").trim() };
+		}
+	} catch {
+		// herdr is optional: a pi started outside it falls back to the folder
+	}
+	return undefined;
+}
+
 /** The name people already see in Herdr, else the folder. */
 async function resolveName(pi: ExtensionAPI, cwd: string): Promise<string> {
 	const explicit = process.env.PI_PEER_NAME;
 	if (explicit) return sanitizeName(explicit);
-
-	const terminal = process.env.HC_TERMINAL_ID;
-	if (terminal) {
-		try {
-			const result = await pi.exec("hc", ["get", terminal], { timeout: 3000 });
-			const info = JSON.parse(result.stdout);
-			const where = info?.labels?.where;
-			if (typeof where === "string" && where.includes("/")) {
-				return sanitizeName(`pi-${where.split("/")[0].trim()}`);
-			}
-			const title = info?.title;
-			if (typeof title === "string" && title.includes(" - ")) {
-				return sanitizeName(`pi-${title.split(" - ").pop()?.trim()}`);
-			}
-		} catch {
-			// herdr is optional
-		}
-	}
+	const where = await herdrWhereWithRetry(pi);
+	if (where?.space) return sanitizeName(`pi-${where.space}`);
 	return sanitizeName(`pi-${path.basename(cwd) || "agent"}`);
+}
+
+/**
+ * Herdr registers a terminal a moment after it starts, so a lookup at
+ * session_start can miss it. Ask again briefly instead of settling for the
+ * folder name.
+ */
+async function herdrWhereWithRetry(
+	pi: ExtensionAPI,
+	attempts = 6,
+): Promise<{ space: string; tab: string } | undefined> {
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		const where = await herdrWhere(pi);
+		if (where?.space) return where;
+		await new Promise((resolve) => setTimeout(resolve, 800).unref?.());
+	}
+	return undefined;
+}
+
+/** A session in the same space gets the tab's name before a bare number. */
+async function uniqueName(base: string, pi: ExtensionAPI, cwd: string): Promise<string> {
+	const taken = new Set(
+		liveSessions()
+			.filter((s) => s.pid !== process.pid)
+			.map((s) => s.name),
+	);
+	if (!taken.has(base)) return base;
+
+	const where = await herdrWhere(pi);
+	const tab = where?.tab ?? "";
+	if (tab && !/^\d+$/.test(tab)) {
+		const withTab = sanitizeName(`${base}-${tab}`);
+		if (withTab && !taken.has(withTab)) return withTab;
+	}
+	let n = 2;
+	while (taken.has(`${base}-${n}`)) n += 1;
+	return `${base}-${n}`;
 }
 
 function unwrap(text: string): { body: string; meta: Record<string, string> } {
@@ -345,20 +384,8 @@ export default function piPeerExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		peerName = sanitizeName(
-			process.env.PI_PEER_NAME || (await resolveName(pi, ctx.cwd || process.cwd())),
-		);
-		// Two sessions in the same space get a number rather than the same name.
-		const taken = new Set(
-			liveSessions()
-				.filter((s) => s.pid !== process.pid)
-				.map((s) => s.name),
-		);
-		if (taken.has(peerName)) {
-			let n = 2;
-			while (taken.has(`${peerName}-${n}`)) n += 1;
-			peerName = `${peerName}-${n}`;
-		}
+		const cwd = ctx.cwd || process.cwd();
+		peerName = await uniqueName(await resolveName(pi, cwd), pi, cwd);
 
 		sessionId = crypto.randomUUID();
 		token = crypto.randomBytes(16).toString("hex");
@@ -406,8 +433,24 @@ export default function piPeerExtension(pi: ExtensionAPI) {
 		}
 
 		publish();
-		refresh = setInterval(publish, 30_000);
-		refresh.unref?.();
+		// Rename the space in Herdr and the address follows, so the name is always
+		// the one on screen.
+		const tick = setInterval(async () => {
+			try {
+				if (!process.env.PI_PEER_NAME) {
+					const next = await uniqueName(await resolveName(pi, cwd), pi, cwd);
+					if (next !== peerName) {
+						peerName = next;
+						ctx.ui.notify(`pi-peer: now reachable as ${peerName}`, "info");
+					}
+				}
+			} catch {
+				// a failed lookup keeps the current name
+			}
+			publish();
+		}, 30_000);
+		tick.unref?.();
+		refresh = tick as any;
 		ctx.ui.notify(`pi-peer: reachable as ${peerName}`, "info");
 	});
 
