@@ -1,0 +1,15 @@
+[Unit]
+Description=pi-peer inbox for %i
+Documentation=https://github.com/serranoid/pi-peer
+After=default.target
+
+[Service]
+Type=simple
+# The name is what other agent sessions see in ListAgents, so keep it short:
+#   systemctl --user enable --now 'pi-peer@pi-home'
+ExecStart=%h/.local/bin/pi-peer daemon --name %i
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

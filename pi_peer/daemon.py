@@ -31,6 +31,13 @@ WRAPPER = re.compile(
 ATTR = re.compile(r"([a-z-]+)=\"([^\"]*)\"")
 
 
+def sender_name(peer: str | None) -> str | None:
+    """A peer that does not wrap its text still has a name in the registry."""
+    if not peer:
+        return None
+    return registry.name_for_socket(peer)
+
+
 def unwrap(text: str) -> tuple[str, dict[str, str]]:
     """Split a peer reply into its body and the provenance attributes."""
     match = WRAPPER.search(text.strip())
@@ -138,7 +145,7 @@ class Inbox:
         entry = {
             "at": int(time.time() * 1000),
             "from": peer,
-            "from_name": meta.get("from-name"),
+            "from_name": meta.get("from-name") or sender_name(peer),
             "hop_chain": meta.get("hop-chain"),
             "mode": meta.get("from-mode"),
             "type": frame.get("type"),

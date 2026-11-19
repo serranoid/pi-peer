@@ -56,8 +56,15 @@ def cmd_start(args: argparse.Namespace) -> int:
     os.dup2(devnull.fileno(), 0)
     os.dup2(log.fileno(), 1)
     os.dup2(log.fileno(), 2)
-    code = Inbox(name=args.name, cwd=cwd).serve()
+    code = Inbox(name=args.name or registry.resolve_name(cwd), cwd=cwd).serve()
     os._exit(code)
+
+def cmd_daemon(args: argparse.Namespace) -> int:
+    cwd = args.cwd or os.getcwd()
+    if args.cwd:
+        os.chdir(args.cwd)
+    return Inbox(name=args.name or registry.resolve_name(cwd), cwd=cwd).serve()
+
 
 def cmd_stop(_args: argparse.Namespace) -> int:
     state = read_state()
@@ -183,6 +190,34 @@ def cmd_ask(args: argparse.Namespace) -> int:
     print("no answer within the wait; check 'pi-peer inbox'", file=sys.stderr)
     return 1
 
+def cmd_send(args: argparse.Namespace) -> int:
+    state = read_state()
+    if not state:
+        print("pi-peer is not running: start it with 'pi-peer start'", file=sys.stderr)
+        return 2
+    target = registry.resolve_target(args.target)
+    if target is None:
+        print(f"no live session matches {args.target!r}; try 'pi-peer ls'", file=sys.stderr)
+        return 2
+    if target.pid == state["pid"]:
+        print("that is this session", file=sys.stderr)
+        return 2
+    result = control(
+        {
+            "action": "send",
+            "target": target.socket_path,
+            "session_id": target.session_id,
+            "token": _target_token(target),
+            "text": args.message,
+        }
+    )
+    if not result.get("ok"):
+        print(result.get("error", "send failed"), file=sys.stderr)
+        return 1
+    print(f"sent to {target.name or target.pid} ({target.pid})")
+    return 0
+
+
 def cmd_inbox(args: argparse.Namespace) -> int:
     entries = inbox_entries(limit=args.limit)
     if args.json:
@@ -209,8 +244,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("start", help="run the inbox in the background")
-    p.add_argument("--name", default="pi", help="the name other sessions see (default: pi)")
+    p.add_argument("--name", default=None, help="the name other sessions see (default: from Herdr or the folder)")
     p.set_defaults(func=cmd_start)
+
+    p = sub.add_parser("daemon", help="run the inbox in the foreground (what systemd runs)")
+    p.add_argument("--name", default=None)
+    p.add_argument("--cwd", default=None)
+    p.set_defaults(func=cmd_daemon)
 
     sub.add_parser("stop", help="stop the inbox").set_defaults(func=cmd_stop)
     sub.add_parser("status", help="is it running").set_defaults(func=cmd_status)
@@ -225,6 +265,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("message")
     p.add_argument("--wait", type=float, default=DEFAULT_WAIT, help="seconds to wait (0: don't)")
     p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("send", help="send without waiting")
+    p.add_argument("target")
+    p.add_argument("message")
+    p.set_defaults(func=cmd_send)
 
     p = sub.add_parser("inbox", help="what arrived")
     p.add_argument("-n", "--limit", type=int, default=20)

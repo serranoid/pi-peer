@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -140,6 +142,49 @@ def pid_domain() -> str | None:
         value = session.raw.get("pidDomain")
         if isinstance(value, str) and value:
             return value
+    return None
+
+
+def sanitize_name(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
+    return cleaned[:32]
+
+
+def resolve_name(cwd: str | None = None) -> str:
+    """The name a human already sees, so several sessions stay apart.
+
+    ``PI_PEER_NAME`` wins; otherwise the Herdr space the terminal is in (the
+    label Herdr shows in its agents list); otherwise the folder.
+    """
+    explicit = os.environ.get("PI_PEER_NAME")
+    if explicit:
+        return sanitize_name(explicit)
+
+    terminal = os.environ.get("HC_TERMINAL_ID")
+    if terminal:
+        try:
+            out = subprocess.run(
+                ["hc", "get", terminal], capture_output=True, text=True, timeout=3
+            )
+            info = json.loads(out.stdout or "{}")
+            where = (info.get("labels") or {}).get("where")
+            if isinstance(where, str) and "/" in where:
+                return sanitize_name("pi-" + where.split("/")[0].strip())
+            title = info.get("title")
+            if isinstance(title, str) and " - " in title:
+                return sanitize_name("pi-" + title.split(" - ")[-1].strip())
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+
+    return sanitize_name("pi-" + Path(cwd or os.getcwd()).name)
+
+
+def name_for_socket(socket_path: str) -> str | None:
+    """The session name behind an address, so a message says who sent it."""
+    wanted = canonical(socket_path.replace("uds:", ""))
+    for session in live_sessions(include_dead=True):
+        if canonical(session.socket_path) == wanted:
+            return session.name
     return None
 
 
