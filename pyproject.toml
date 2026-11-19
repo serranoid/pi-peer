@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pi-peer"
+version = "0.1.0"
+description = "Let Claude Code sessions message pi, and pi answer back: a local peer inbox over the cross-session socket protocol."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Jorge Serrano", email = "jorge.serrano@rationaltouch.com" }]
+keywords = ["claude-code", "agents", "ipc", "unix-socket", "multi-agent"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+pi-peer = "pi_peer.cli:main"
+
+[tool.setuptools]
+packages = ["pi_peer"]
